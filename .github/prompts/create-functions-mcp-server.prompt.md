@@ -69,6 +69,17 @@ Add the necessary files to run the MCP server as a custom handler in Azure Funct
     }
     ```
 
+
+1. Create a `local.settings.json` file with the following content:
+    ```json
+    {
+        "IsEncrypted": false,
+        "Values": {
+            "FUNCTIONS_WORKER_RUNTIME": "custom"
+        }
+    }
+    ```
+
 ### Update the MCP server code
 
 Modify the MCP server code to listen for HTTP requests on the port specified by the Azure Functions environment variable `FUNCTIONS_CUSTOMHANDLER_PORT`. This is typically done by reading the environment variable in your server code and using it to set the port for the HTTP server.
@@ -77,7 +88,7 @@ Modify the MCP server code to listen for HTTP requests on the port specified by 
 
 Create an `infra` folder and an `azure.yaml` file so that the MCP server can be deployed using the Azure Developer CLI (AzD).
 
-First, copy the `azure.yaml` file and `infra` folder from this repository: https://github.com/Azure-Samples/functions-quickstart-python-http-azd
+First, use the terminal to download a zip of this repository: https://github.com/Azure-Samples/functions-quickstart-python-http-azd . Extract the contents and copy the `azure.yaml` file to the `infra` folder in your MCP server project and delete the zip file.
 
 Next, modify the `azure.yaml` file and Bicep files to match the runtime/language of the MCP server project.
 
