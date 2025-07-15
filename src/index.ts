@@ -1,83 +1,70 @@
 #!/usr/bin/env node
 
-import express, { Request, Response } from "express";
-import { randomUUID } from "node:crypto";
+import express from "express";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 
-interface WeatherAlert {
-  event: string;
-  headline: string;
-  description: string;
-  severity: string;
-  areas: string;
-}
+const NWS_API_BASE = "https://api.weather.gov";
+const USER_AGENT = "weather-app/1.0";
 
-interface WeatherData {
-  location: string;
-  temperature: number;
-  conditions: string;
-  humidity: number;
-  windSpeed: number;
-  forecast: string[];
-}
-
-function createWeatherServer(): McpServer {
+// Function to create a new server instance for each request (stateless)
+function createServer() {
   const server = new McpServer({
-    name: "weather-server",
+    name: "weather",
     version: "1.0.0",
+    capabilities: {
+      resources: {},
+      tools: {},
+    },
   });
 
-  // Register get-alerts tool
-  server.registerTool(
-    "get-alerts",
-    {
-      title: "Get Weather Alerts",
-      description: "Get weather alerts for a state",
-      inputSchema: {
-        state: z.string().min(2).max(2).describe("Two-letter state code (e.g. CA, NY)"),
-      },
-    },
-    async ({ state }) => {
-      if (!state || state.length !== 2) {
-        throw new Error("State must be a valid two-letter state code");
-      }
+  // Register weather tools
+  server.tool(
+    "get-weather-user",
+    "Get current the profile information for the user who's currently logged into the weather MCP server",
+    {},
+    async (_, extra) => {
+      // middleware should ensure that the request has an authorization header
+      const authHeader = extra.requestInfo?.headers.authorization as string;
+      const token = authHeader.substring(7); // Remove "Bearer " prefix
 
       try {
-        const response = await fetch(
-          `https://api.weather.gov/alerts/active?area=${state.toUpperCase()}`
-        );
-        
+        const response = await fetch("https://api.github.com/user", {
+          headers: {
+            "Authorization": `Bearer ${token}`,
+            "Accept": "application/vnd.github.v3+json",
+            "User-Agent": USER_AGENT
+          }
+        });
+
         if (!response.ok) {
-          throw new Error(`Weather API error: ${response.status}`);
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Failed to fetch user profile: ${response.status} ${response.statusText}`,
+              },
+            ],
+          };
         }
 
-        const data = await response.json();
-        const alerts = data.features || [];
-
-        const formattedAlerts: WeatherAlert[] = alerts.map((alert: any) => ({
-          event: alert.properties.event,
-          headline: alert.properties.headline,
-          description: alert.properties.description,
-          severity: alert.properties.severity,
-          areas: alert.properties.areaDesc,
-        }));
+        const userProfile = await response.json();
 
         return {
           content: [
             {
-              type: "text" as const,
-              text: formattedAlerts.length > 0 
-                ? `Found ${formattedAlerts.length} active weather alerts for ${state.toUpperCase()}:\n\n${formattedAlerts
-                    .map((alert, i) => 
-                      `${i + 1}. **${alert.event}** (${alert.severity})\n` +
-                      `   ${alert.headline}\n` +
-                      `   Areas: ${alert.areas}\n`
-                    )
-                    .join('\n')}`
-                : `No active weather alerts for ${state.toUpperCase()}`,
+              type: "text",
+              text: `User Profile:
+                    Name: ${userProfile.name || 'Not provided'}
+                    Username: ${userProfile.login}
+                    Email: ${userProfile.email || 'Not public'}
+                    Bio: ${userProfile.bio || 'No bio available'}
+                    Location: ${userProfile.location || 'Not provided'}
+                    Public Repos: ${userProfile.public_repos}
+                    Followers: ${userProfile.followers}
+                    Following: ${userProfile.following}
+                    Created: ${new Date(userProfile.created_at).toLocaleDateString()}`,
             },
           ],
         };
@@ -85,8 +72,8 @@ function createWeatherServer(): McpServer {
         return {
           content: [
             {
-              type: "text" as const,
-              text: `Error fetching weather alerts: ${error instanceof Error ? error.message : 'Unknown error'}`,
+              type: "text",
+              text: `Error fetching user profile: ${error instanceof Error ? error.message : 'Unknown error'}`,
             },
           ],
         };
@@ -94,172 +81,325 @@ function createWeatherServer(): McpServer {
     }
   );
 
-  // Register get-forecast tool
-  server.registerTool(
-    "get-forecast",
+  server.tool(
+    "get-alerts",
+    "Get weather alerts for a state",
     {
-      title: "Get Weather Forecast",
-      description: "Get weather forecast for a location",
-      inputSchema: {
-        latitude: z.number().min(-90).max(90).describe("Latitude of the location"),
-        longitude: z.number().min(-180).max(180).describe("Longitude of the location"),
-      },
+      state: z.string().length(2).describe("Two-letter state code (e.g. CA, NY)"),
+    },
+    async ({ state }) => {
+      const stateCode = state.toUpperCase();
+      const alertsUrl = `${NWS_API_BASE}/alerts?area=${stateCode}`;
+      const alertsData = await makeNWSRequest<AlertsResponse>(alertsUrl);
+
+      if (!alertsData) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "Failed to retrieve alerts data",
+            },
+          ],
+        };
+      }
+
+      const features = alertsData.features || [];
+      if (features.length === 0) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `No active alerts for ${stateCode}`,
+            },
+          ],
+        };
+      }
+
+      const formattedAlerts = features.map(formatAlert);
+      const alertsText = `Active alerts for ${stateCode}:\n\n${formattedAlerts.join("\n")}`;
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: alertsText,
+          },
+        ],
+      };
+    },
+  );
+
+  server.tool(
+    "get-forecast",
+    "Get weather forecast for a location",
+    {
+      latitude: z.number().min(-90).max(90).describe("Latitude of the location"),
+      longitude: z
+        .number()
+        .min(-180)
+        .max(180)
+        .describe("Longitude of the location"),
     },
     async ({ latitude, longitude }) => {
-      if (latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) {
-        throw new Error("Invalid coordinates");
-      }
+      // Get grid point data
+      const pointsUrl = `${NWS_API_BASE}/points/${latitude.toFixed(4)},${longitude.toFixed(4)}`;
+      const pointsData = await makeNWSRequest<PointsResponse>(pointsUrl);
 
-      try {
-        // Get the forecast office and grid coordinates
-        const pointResponse = await fetch(
-          `https://api.weather.gov/points/${latitude},${longitude}`
-        );
-        
-        if (!pointResponse.ok) {
-          throw new Error(`Weather API error: ${pointResponse.status}`);
-        }
-
-        const pointData = await pointResponse.json();
-        const forecastUrl = pointData.properties.forecast;
-
-        // Get the forecast
-        const forecastResponse = await fetch(forecastUrl);
-        
-        if (!forecastResponse.ok) {
-          throw new Error(`Forecast API error: ${forecastResponse.status}`);
-        }
-
-        const forecastData = await forecastResponse.json();
-        const periods = forecastData.properties.periods || [];
-
-        const forecast = periods.slice(0, 5).map((period: any) => ({
-          name: period.name,
-          temperature: period.temperature,
-          temperatureUnit: period.temperatureUnit,
-          windSpeed: period.windSpeed,
-          windDirection: period.windDirection,
-          shortForecast: period.shortForecast,
-          detailedForecast: period.detailedForecast,
-        }));
-
+      if (!pointsData) {
         return {
           content: [
             {
-              type: "text" as const,
-              text: `Weather forecast for ${latitude}, ${longitude}:\n\n${forecast
-                .map((period: any) => 
-                  `**${period.name}**\n` +
-                  `Temperature: ${period.temperature}°${period.temperatureUnit}\n` +
-                  `Wind: ${period.windSpeed} ${period.windDirection}\n` +
-                  `Conditions: ${period.shortForecast}\n` +
-                  `${period.detailedForecast}\n`
-                )
-                .join('\n')}`,
-            },
-          ],
-        };
-      } catch (error) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `Error fetching weather forecast: ${error instanceof Error ? error.message : 'Unknown error'}`,
+              type: "text",
+              text: `Failed to retrieve grid point data for coordinates: ${latitude}, ${longitude}. This location may not be supported by the NWS API (only US locations are supported).`,
             },
           ],
         };
       }
-    }
+
+      const forecastUrl = pointsData.properties?.forecast;
+      if (!forecastUrl) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "Failed to get forecast URL from grid point data",
+            },
+          ],
+        };
+      }
+
+      // Get forecast data
+      const forecastData = await makeNWSRequest<ForecastResponse>(forecastUrl);
+      if (!forecastData) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "Failed to retrieve forecast data",
+            },
+          ],
+        };
+      }
+
+      const periods = forecastData.properties?.periods || [];
+      if (periods.length === 0) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "No forecast periods available",
+            },
+          ],
+        };
+      }
+
+      // Format forecast periods
+      const formattedForecast = periods.map((period: ForecastPeriod) =>
+        [
+          `${period.name || "Unknown"}:`,
+          `Temperature: ${period.temperature || "Unknown"}°${period.temperatureUnit || "F"}`,
+          `Wind: ${period.windSpeed || "Unknown"} ${period.windDirection || ""}`,
+          `${period.shortForecast || "No forecast available"}`,
+          "---",
+        ].join("\n"),
+      );
+
+      const forecastText = `Forecast for ${latitude}, ${longitude}:\n\n${formattedForecast.join("\n")}`;
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: forecastText,
+          },
+        ],
+      };
+    },
   );
 
   return server;
 }
 
-// Express app setup
-const app = express();
-app.use(express.json());
+// Helper function for making NWS API requests
+async function makeNWSRequest<T>(url: string): Promise<T | null> {
+  const headers = {
+    "User-Agent": USER_AGENT,
+    Accept: "application/geo+json",
+  };
 
-// Map to store transports by session ID
-const transports: { [sessionId: string]: StreamableHTTPServerTransport } = {};
+  try {
+    const response = await fetch(url, { headers });
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    return (await response.json()) as T;
+  } catch (error) {
+    console.error("Error making NWS request:", error);
+    return null;
+  }
+}
 
-// Handle POST requests for client-to-server communication
-app.post('/mcp', async (req: Request, res: Response) => {
-  // Check for existing session ID
-  const sessionId = req.headers['mcp-session-id'] as string | undefined;
-  let transport: StreamableHTTPServerTransport;
+interface AlertFeature {
+  properties: {
+    event?: string;
+    areaDesc?: string;
+    severity?: string;
+    status?: string;
+    headline?: string;
+  };
+}
 
-  if (sessionId && transports[sessionId]) {
-    // Reuse existing transport
-    transport = transports[sessionId];
-  } else if (!sessionId && isInitializeRequest(req.body)) {
-    // New initialization request
-    transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: () => randomUUID(),
-      onsessioninitialized: (sessionId) => {
-        // Store the transport by session ID
-        transports[sessionId] = transport;
-      },
-      // DNS rebinding protection disabled for local testing
-      enableDnsRebindingProtection: false,
+// Format alert data
+function formatAlert(feature: AlertFeature): string {
+  const props = feature.properties;
+  return [
+    `Event: ${props.event || "Unknown"}`,
+    `Area: ${props.areaDesc || "Unknown"}`,
+    `Severity: ${props.severity || "Unknown"}`,
+    `Status: ${props.status || "Unknown"}`,
+    `Headline: ${props.headline || "No headline"}`,
+    "---",
+  ].join("\n");
+}
+
+interface ForecastPeriod {
+  name?: string;
+  temperature?: number;
+  temperatureUnit?: string;
+  windSpeed?: string;
+  windDirection?: string;
+  shortForecast?: string;
+}
+
+interface AlertsResponse {
+  features: AlertFeature[];
+}
+
+interface PointsResponse {
+  properties: {
+    forecast?: string;
+  };
+}
+
+interface ForecastResponse {
+  properties: {
+    periods: ForecastPeriod[];
+  };
+}
+
+
+
+async function main() {
+  const app = express();
+  app.use(express.json());
+
+  // Anonymous endpoint - must be defined before authentication middleware
+  app.get('/.well-known/oauth-protected-resource', (req, res) => {
+    res.json({
+      "resource_name": "Functions Weather MCP Server",
+      "resource": `https://${process.env.WEBSITE_DEFAULT_HOSTNAME ?? 'localhost'}/`,
+      "authorization_servers": ["https://github.com/login/oauth"],
+      "bearer_methods_supported": ["header"],
+      "scopes_supported": [
+        "read:user",
+      ]
     });
+  });
 
-    // Clean up transport when closed
-    transport.onclose = () => {
-      if (transport.sessionId) {
-        delete transports[transport.sessionId];
+  // Authentication middleware
+  app.use((req: express.Request, res: express.Response, next: express.NextFunction): void => {
+    const authHeader = req.headers.authorization;
+
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      const hostname = req.hostname;
+      res.status(401).header("www-authenticate",
+        `Bearer error="invalid_request", error_description="No access token was provided in this request", resource_metadata="https://${hostname}/.well-known/oauth-protected-resource`
+      ).json({});
+      return;
+    }
+
+    // Token is present, continue to next middleware
+    next();
+  });
+
+  // Handle POST requests for client-to-server communication (stateless mode)
+  app.post('/mcp', async (req, res) => {
+    // In stateless mode, create a new instance of transport and server for each request
+    // to ensure complete isolation. A single instance would cause request ID collisions
+    // when multiple clients connect concurrently.
+
+    try {
+      const server = createServer();
+      const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: undefined, // Stateless mode
+      });
+
+      res.on('close', () => {
+        console.log('Request closed');
+        transport.close();
+        server.close();
+      });
+
+      await server.connect(transport);
+      await transport.handleRequest(req, res, req.body);
+    } catch (error) {
+      console.error('Error handling MCP request:', error);
+      if (!res.headersSent) {
+        res.status(500).json({
+          jsonrpc: '2.0',
+          error: {
+            code: -32603,
+            message: 'Internal server error',
+          },
+          id: null,
+        });
       }
-    };
+    }
+  });
 
-    const server = createWeatherServer();
-
-    // Connect to the MCP server
-    await server.connect(transport);
-  } else {
-    // Invalid request
-    res.status(400).json({
-      jsonrpc: '2.0',
+  // SSE notifications not supported in stateless mode
+  app.get('/mcp', async (req, res) => {
+    console.log('Received GET MCP request');
+    res.writeHead(405).end(JSON.stringify({
+      jsonrpc: "2.0",
       error: {
         code: -32000,
-        message: 'Bad Request: No valid session ID provided',
+        message: "Method not allowed."
       },
-      id: null,
-    });
-    return;
+      id: null
+    }));
+  });
+
+  // Session termination not needed in stateless mode
+  app.delete('/mcp', async (req, res) => {
+    console.log('Received DELETE MCP request');
+    res.writeHead(405).end(JSON.stringify({
+      jsonrpc: "2.0",
+      error: {
+        code: -32000,
+        message: "Method not allowed."
+      },
+      id: null
+    }));
+  });
+
+  // Start the server
+  // Use Azure Functions custom handler port if available, otherwise fallback to 3000
+  if (process.env.FUNCTIONS_CUSTOMHANDLER_PORT) {
+    console.log('Running as Azure Functions custom handler on port', process.env.FUNCTIONS_CUSTOMHANDLER_PORT);
   }
+  const PORT = process.env.FUNCTIONS_CUSTOMHANDLER_PORT || 3000;
+  app.listen(PORT, (error?: Error) => {
+    if (error) {
+      console.error('Failed to start server:', error);
+      process.exit(1);
+    }
+    console.log(`Weather MCP Stateless HTTP Server listening on port ${PORT}`);
+    console.log(`MCP endpoint: http://localhost:${PORT}/mcp`);
+  });
+}
 
-  // Handle the request
-  await transport.handleRequest(req, res, req.body);
+main().catch((error) => {
+  console.error("Fatal error in main():", error);
+  process.exit(1);
 });
-
-// Reusable handler for GET and DELETE requests
-const handleSessionRequest = async (req: Request, res: Response) => {
-  const sessionId = req.headers['mcp-session-id'] as string | undefined;
-  if (!sessionId || !transports[sessionId]) {
-    res.status(400).send('Invalid or missing session ID');
-    return;
-  }
-  
-  const transport = transports[sessionId];
-  await transport.handleRequest(req, res);
-};
-
-// Handle GET requests for server-to-client notifications via SSE
-app.get('/mcp', handleSessionRequest);
-
-// Handle DELETE requests for session termination
-app.delete('/mcp', handleSessionRequest);
-
-// Health check endpoint
-app.get('/health', (req: Request, res: Response) => {
-  res.json({ status: 'healthy', timestamp: new Date().toISOString() });
-});
-
-// Start the server
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Weather MCP server running on port ${PORT}`);
-  console.log(`Health check: http://localhost:${PORT}/health`);
-  console.log(`MCP endpoint: http://localhost:${PORT}/mcp`);
-});
-
-export default app;
