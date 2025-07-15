@@ -19,68 +19,6 @@ function createServer() {
     },
   });
 
-  // Register weather tools
-  server.tool(
-    "get-weather-user",
-    "Get current the profile information for the user who's currently logged into the weather MCP server",
-    {},
-    async (_, extra) => {
-      // middleware should ensure that the request has an authorization header
-      const authHeader = extra.requestInfo?.headers.authorization as string;
-      const token = authHeader.substring(7); // Remove "Bearer " prefix
-
-      try {
-        const response = await fetch("https://api.github.com/user", {
-          headers: {
-            "Authorization": `Bearer ${token}`,
-            "Accept": "application/vnd.github.v3+json",
-            "User-Agent": USER_AGENT
-          }
-        });
-
-        if (!response.ok) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: `Failed to fetch user profile: ${response.status} ${response.statusText}`,
-              },
-            ],
-          };
-        }
-
-        const userProfile = await response.json();
-
-        return {
-          content: [
-            {
-              type: "text",
-              text: `User Profile:
-                    Name: ${userProfile.name || 'Not provided'}
-                    Username: ${userProfile.login}
-                    Email: ${userProfile.email || 'Not public'}
-                    Bio: ${userProfile.bio || 'No bio available'}
-                    Location: ${userProfile.location || 'Not provided'}
-                    Public Repos: ${userProfile.public_repos}
-                    Followers: ${userProfile.followers}
-                    Following: ${userProfile.following}
-                    Created: ${new Date(userProfile.created_at).toLocaleDateString()}`,
-            },
-          ],
-        };
-      } catch (error) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Error fetching user profile: ${error instanceof Error ? error.message : 'Unknown error'}`,
-            },
-          ],
-        };
-      }
-    }
-  );
-
   server.tool(
     "get-alerts",
     "Get weather alerts for a state",
@@ -287,40 +225,9 @@ interface ForecastResponse {
   };
 }
 
-
-
 async function main() {
   const app = express();
   app.use(express.json());
-
-  // Anonymous endpoint - must be defined before authentication middleware
-  app.get('/.well-known/oauth-protected-resource', (req, res) => {
-    res.json({
-      "resource_name": "Functions Weather MCP Server",
-      "resource": `https://${process.env.WEBSITE_DEFAULT_HOSTNAME ?? 'localhost'}/`,
-      "authorization_servers": ["https://github.com/login/oauth"],
-      "bearer_methods_supported": ["header"],
-      "scopes_supported": [
-        "read:user",
-      ]
-    });
-  });
-
-  // Authentication middleware
-  app.use((req: express.Request, res: express.Response, next: express.NextFunction): void => {
-    const authHeader = req.headers.authorization;
-
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      const hostname = req.hostname;
-      res.status(401).header("www-authenticate",
-        `Bearer error="invalid_request", error_description="No access token was provided in this request", resource_metadata="https://${hostname}/.well-known/oauth-protected-resource`
-      ).json({});
-      return;
-    }
-
-    // Token is present, continue to next middleware
-    next();
-  });
 
   // Handle POST requests for client-to-server communication (stateless mode)
   app.post('/mcp', async (req, res) => {
