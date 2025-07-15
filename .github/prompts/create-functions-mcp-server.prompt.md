@@ -90,7 +90,14 @@ Create an `infra` folder and an `azure.yaml` file so that the MCP server can be 
 
 First, use the terminal to download a zip of this repository: https://github.com/Azure-Samples/functions-quickstart-python-http-azd . Extract the zip into a folder named `unzip`. Copy the `azure.yaml` file and the `infra` folder to your MCP server project. Delete the zip file and `unzip` folder after copying the files.
 
-Next, modify the `azure.yaml` file and Bicep files to match the runtime/language of the MCP server project.
+Next, modify the `azure.yaml` file to match the runtime/language of the MCP server project.
+
+In the Bicep files, change the function app's name to reflect the MCP server project name.
+
+Also in the Bicep files, change the runtime and runtime version to based on the following rules:
+- For Node.js, use `node` and `22`
+- For Python, use `python` and the version of Python used in the MCP server project (e.g., `3.10`)
+- For C#, use `custom` and `1.0`
 
 ## Summarize the changes
 
