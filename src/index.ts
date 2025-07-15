@@ -291,11 +291,8 @@ async function main() {
   });
 
   // Start the server
-  // Use Azure Functions custom handler port if available, otherwise fallback to 3000
-  if (process.env.FUNCTIONS_CUSTOMHANDLER_PORT) {
-    console.log('Running as Azure Functions custom handler on port', process.env.FUNCTIONS_CUSTOMHANDLER_PORT);
-  }
-  const PORT = process.env.FUNCTIONS_CUSTOMHANDLER_PORT || 3000;
+
+  const PORT = process.env.PORT || 3000;
   app.listen(PORT, (error?: Error) => {
     if (error) {
       console.error('Failed to start server:', error);

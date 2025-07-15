@@ -88,7 +88,7 @@ Modify the MCP server code to listen for HTTP requests on the port specified by 
 
 Create an `infra` folder and an `azure.yaml` file so that the MCP server can be deployed using the Azure Developer CLI (AzD).
 
-First, use the terminal to download a zip of this repository: https://github.com/Azure-Samples/functions-quickstart-python-http-azd . Extract the contents and copy the `azure.yaml` file to the `infra` folder in your MCP server project and delete the zip file.
+First, use the terminal to download a zip of this repository: https://github.com/Azure-Samples/functions-quickstart-python-http-azd . Extract the zip into a folder named `unzip`. Copy the `azure.yaml` file and the `infra` folder to your MCP server project. Delete the zip file and `unzip` folder after copying the files.
 
 Next, modify the `azure.yaml` file and Bicep files to match the runtime/language of the MCP server project.
 
