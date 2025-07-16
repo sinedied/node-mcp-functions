@@ -14,15 +14,17 @@ Your goal is to take the MCP server in the current codebase and add the necessar
 
 ### Additional validations
 
-**Important**: Ensure the MCP server uses streamable HTTP transport and is stateless. If either of these conditions is not met, the MCP server will not work correctly in Azure Functions. Do not proceed.
+**Important**: STOP if the MCP server does not meet the following requirements. **Do not attempt to fix the MCP server code, just inform the user that the MCP server does not meet the requirements and exit.**
 
-Ensure the MCP server uses streamable HTTP transport, not stdio.
-- For Node.js, look for code that uses `StreamableHTTPServerTransport`.
-- For Python, if using FastMCP, ensure the server is run with `transport="streamable-http"`.
+1. The MCP server must use streamable HTTP transport, not stdio.
+    - For Node.js, it must use `StreamableHTTPServerTransport`.
+    - For Python, the FastMCP server must be run with `transport="streamable-http"`.
 
-Ensure the MCP server is stateless.
-- For Node.js, `StreamableHTTPServerTransport` must not have `sessionIdGenerator` configured.
-- For Python, if using FastMCP, ensure the server is created with `stateless_http=True`.
+2. The MCP server must be stateless.
+    - For Node.js, `StreamableHTTPServerTransport` must not have `sessionIdGenerator` configured.
+    - For Python, the server FastMCP server must be created with `stateless_http=True`. The default value is `False`, so it must be explicitly set it to `True`.
+    
+Again, this is super important -- if the above conditions are not met, STOP and don't make any changes.
 
 ## Steps
 
